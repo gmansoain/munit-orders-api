@@ -1,0 +1,49 @@
+#%RAML 1.0
+title: Orders API
+version: v1
+mediaType: application/json
+
+types:
+  OrderRequest:
+    type: object
+    additionalProperties: false
+    properties:
+      amount:
+        type: number
+        description: Order amount. Must be greater than 0.
+        example: 250
+  OrderAccepted:
+    type: object
+    properties:
+      orderId: string
+      amount:  number
+      tier:
+        type: string
+        enum: [ standard, priority ]   # priority when amount > 100
+      status:
+        type: string
+        enum: [ accepted ]
+      notified: boolean                # false if the notification call failed
+  Error:
+    type: object
+    properties:
+      error:   string
+      message: string
+
+/orders:
+  post:
+    displayName: Create order
+    body:
+      application/json:
+        type: OrderRequest
+    responses:
+      201:
+        description: Order accepted. Notified when amount > 100; notified=false if the alert call fails.
+        body:
+          application/json:
+            type: OrderAccepted
+      400:
+        description: Invalid order — amount missing or <= 0 (maps from ORDERS:INVALID).
+        body:
+          application/json:
+            type: Error

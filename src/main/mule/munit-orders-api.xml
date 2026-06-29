@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd 
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd">
+
+	<http:listener-config name="HTTP_Listener_config" doc:name="HTTP Listener config" doc:id="aa5e2449-443b-4b07-8daa-56f6b445f0f3" >
+		<http:listener-connection host="0.0.0.0" port="8081" />
+	</http:listener-config>
+	<http:request-config name="HTTP_Request_config" doc:name="HTTP Request config" doc:id="98930e76-12d7-4852-bb10-59b2e3a420ad" >
+		<http:request-connection host="localhost" port="8000" />
+	</http:request-config>
+	<flow name="orders-api-main">
+		<http:listener config-ref="HTTP_Listener_config" path="/orders" doc:name="POST /orders" allowedMethods="POST"/>
+		<flow-ref name="validate-order-subflow" doc:name="validate-order-subflow"/>
+		<flow-ref name="route-order-flow" doc:name="route-order-flow"/>
+		<ee:transform>  <!-- 201 body -->
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+payload]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<error-handler>
+			<on-error-propagate type="ORDERS:INVALID">
+				<ee:transform>  <!-- HTTP 400 body -->
+					<ee:message >
+						<ee:set-payload ><![CDATA[%dw 2.0
+output application/java
+---
+{
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+				<set-variable variableName="httpStatus" value="400" doc:name="httpStatus = 400"/>
+			</on-error-propagate>
+			<on-error-continue type="HTTP:CONNECTIVITY">
+				<!-- notification failed: accept the order anyway, mark notified=false -->
+				<set-payload value='#[%dw 2.0&#10;output application/json&#10;---&#10;&#10;payload ++ { notified: false }]' doc:name="Notified = False"/>
+			</on-error-continue>
+		</error-handler>
+	</flow>
+
+	<!-- Validation: raises ORDERS:INVALID when the order is not usable -->
+	<sub-flow name="validate-order-subflow">
+		<choice doc:name="Validates amount is a positive integer">
+			<when
+				expression="#[payload.amount == null or payload.amount &lt;= 0]">
+				<raise-error type="ORDERS:INVALID"
+					description="amount must be a positive number" />
+			</when>
+			<otherwise >
+				<logger level="INFO" doc:name="Order is valid" doc:id="d207110f-2131-4094-ad42-5dff1280ea22" message='#["Order is valid"]'/>
+			</otherwise>
+		</choice>
+	</sub-flow>
+
+	<!-- Pure transformation: shape the inbound order into the stored record -->
+	<sub-flow name="build-order-record-subflow">
+		<ee:transform>
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  orderId: uuid(),
+  amount:  payload.amount,
+  tier:    if (payload.amount > 100) "priority" else "standard"
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+	</sub-flow>
+
+	<!-- Orchestration + choice: build the record, notify only above threshold -->
+	<flow name="route-order-flow">
+		<flow-ref name="build-order-record-subflow" doc:name="build-order-record-subflow"/>
+		<choice>
+			<when expression="#[payload.amount > 100]">
+				<logger level="INFO" doc:name="Logger" doc:id="7211d66f-db8c-4dc8-af02-eb4cb3cd0c44" message='#["Big Order amount received = " ++ payload.amount as String]' />
+				<flow-ref name="notify-flow" doc:name="notify-flow"/>
+				<set-payload
+					value='#[%dw 2.0&#10;output application/json&#10;---&#10;&#10;payload ++ { status: "accepted", notified: true }]' doc:name="Notified = True"/>
+			</when>
+			<otherwise>
+				<logger level="INFO" doc:name="Logger" doc:id="4796f25a-f116-40e1-971d-7833458f07a2" message='#["Small Order amount received = " ++ payload.amount as String]' />
+				<set-payload
+					value='#[%dw 2.0&#10;output application/json&#10;---&#10;payload ++ { status: "accepted", notified: false }]' doc:name="Notified = False"/>
+			</otherwise>
+		</choice>
+	</flow>
+
+	<!-- Integration: one external HTTP call -->
+	<flow name="notify-flow">
+		<http:request config-ref="HTTP_Request_config" method="POST"
+			path="/post-alert" doc:name="post-alert" />
+	</flow>
+</mule>

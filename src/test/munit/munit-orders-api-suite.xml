@@ -1,0 +1,579 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ============================================================
+  Suite:        munit-orders-api-suite
+  Unit(s):      orders-api-main             (API entry flow + error handler)
+                validate-order-subflow      (choice / router, raises ORDERS:INVALID)
+                build-order-record-subflow  (transformation)
+                route-order-flow            (orchestration + choice)
+                notify-flow                 (integration / connector)
+  Source:       src/main/mule/munit-orders-api.xml
+  Purpose:      Verify order validation, record shaping, threshold-based notification
+                routing, and the entry-flow error handling (ORDERS:INVALID, HTTP:CONNECTIVITY).
+  Collaborators mocked: http:request (post-alert)
+  Tags:         smoke, regression, error
+  Coverage:     all 5 units — happy, branch, boundary, negative, and error paths
+  Last reviewed: 2026-06-29  (MUnit test-generation agent)
+
+  NOTE on parameterization: MUnit 3.6 declares <munit:parameterizations> under <munit:config>
+  (suite-scoped — the whole suite re-runs per parameterization). That is incompatible with the
+  two independent data sets in this suite plus the non-parameterized tests, so the two designed
+  parameterized tests are implemented as explicit per-case tests (identical coverage).
+  ============================================================
+-->
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core
+          http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/munit
+          http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools
+          http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd">
+
+    <munit:config name="munit-orders-api-suite" minMuleVersion="4.9.0"/>
+
+    <!-- ============================================================
+         Unit: orders-api-main  (API entry flow + error handler)
+         ============================================================ -->
+
+    <munit:test name="orders-api-main-should-accept-and-notify-large-order"
+                description="A valid order with amount greater than 100 is accepted, triggers exactly one notification, and is marked notified=true."
+                tags="smoke,regression">
+        <!-- GIVEN: a valid large order; the alert call succeeds -->
+        <munit:behavior>
+            <munit:set-event doc:name="Input: order amount 250">
+                <munit:payload value="#[%dw 2.0 output application/json --- { amount: 250 }]"
+                               mediaType="application/json"/>
+            </munit:set-event>
+            <munit-tools:mock-when processor="http:request" doc:name="Mock post-alert returns 200">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="post-alert"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[%dw 2.0 output application/json --- { delivered: true }]"
+                                         mediaType="application/json"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <!-- WHEN: the entry flow runs -->
+        <munit:execution>
+            <flow-ref name="orders-api-main"/>
+        </munit:execution>
+        <!-- THEN: accepted + notified, alert called once.
+             NOTE: orderId/amount/tier are NOT asserted here — notify-flow's http:request
+             replaces the payload with the (mocked) HTTP response on the success branch. -->
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Assert status == accepted"
+                                     expression="#[payload.status]"
+                                     is="#[MunitTools::equalTo('accepted')]"/>
+            <munit-tools:assert-that doc:name="Assert notified == true"
+                                     expression="#[payload.notified]"
+                                     is="#[MunitTools::equalTo(true)]"/>
+            <munit-tools:verify-call doc:name="Verify post-alert called once" processor="http:request" times="1">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="post-alert"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="orders-api-main-should-accept-small-order-without-notifying"
+                description="A valid order with amount not greater than 100 is accepted without calling the notification, and is marked notified=false."
+                tags="smoke,regression">
+        <!-- GIVEN: a valid boundary order (100); alert mocked as defence -->
+        <munit:behavior>
+            <munit:set-event doc:name="Input: order amount 100">
+                <munit:payload value="#[%dw 2.0 output application/json --- { amount: 100 }]"
+                               mediaType="application/json"/>
+            </munit:set-event>
+            <munit-tools:mock-when processor="http:request" doc:name="Mock post-alert (defence, must not be called)">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="post-alert"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[%dw 2.0 output application/json --- { delivered: true }]"
+                                         mediaType="application/json"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <!-- WHEN: the entry flow runs -->
+        <munit:execution>
+            <flow-ref name="orders-api-main"/>
+        </munit:execution>
+        <!-- THEN: accepted + not notified; record survives (no notify on this branch) -->
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Assert status == accepted"
+                                     expression="#[payload.status]"
+                                     is="#[MunitTools::equalTo('accepted')]"/>
+            <munit-tools:assert-that doc:name="Assert notified == false"
+                                     expression="#[payload.notified]"
+                                     is="#[MunitTools::equalTo(false)]"/>
+            <munit-tools:assert-that doc:name="Assert tier == standard"
+                                     expression="#[payload.tier]"
+                                     is="#[MunitTools::equalTo('standard')]"/>
+            <munit-tools:assert-that doc:name="Assert amount preserved == 100"
+                                     expression="#[payload.amount]"
+                                     is="#[MunitTools::equalTo(100)]"/>
+            <munit-tools:verify-call doc:name="Verify post-alert never called" processor="http:request" times="0">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="post-alert"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="orders-api-main-should-propagate-invalid-order-as-orders-invalid"
+                description="An order with a non-positive amount fails the entry flow by propagating ORDERS:INVALID."
+                expectedErrorType="ORDERS:INVALID"
+                tags="error,regression">
+        <!-- GIVEN: an invalid order (amount 0) -->
+        <munit:behavior>
+            <munit:set-event doc:name="Input: order amount 0">
+                <munit:payload value="#[%dw 2.0 output application/json --- { amount: 0 }]"
+                               mediaType="application/json"/>
+            </munit:set-event>
+        </munit:behavior>
+        <!-- WHEN: the entry flow runs -->
+        <!-- THEN: ORDERS:INVALID is re-raised (on-error-propagate) — asserted via expectedErrorType -->
+        <munit:execution>
+            <flow-ref name="orders-api-main"/>
+        </munit:execution>
+    </munit:test>
+
+    <munit:test name="orders-api-main-should-accept-order-when-notification-fails"
+                description="When the notification call fails with HTTP:CONNECTIVITY, the order is still accepted and marked notified=false; no status field is set."
+                tags="error,regression">
+        <!-- GIVEN: a valid large order; the alert call raises a connectivity error -->
+        <munit:behavior>
+            <munit:set-event doc:name="Input: order amount 250">
+                <munit:payload value="#[%dw 2.0 output application/json --- { amount: 250 }]"
+                               mediaType="application/json"/>
+            </munit:set-event>
+            <munit-tools:mock-when processor="http:request" doc:name="Mock post-alert raises HTTP:CONNECTIVITY">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="post-alert"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:error typeId="HTTP:CONNECTIVITY"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <!-- WHEN: the entry flow runs -->
+        <munit:execution>
+            <flow-ref name="orders-api-main"/>
+        </munit:execution>
+        <!-- THEN: order recovered, notified=false, record preserved (request failed before replacing payload), status absent -->
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Assert notified == false"
+                                     expression="#[payload.notified]"
+                                     is="#[MunitTools::equalTo(false)]"/>
+            <munit-tools:assert-that doc:name="Assert amount preserved == 250"
+                                     expression="#[payload.amount]"
+                                     is="#[MunitTools::equalTo(250)]"/>
+            <munit-tools:assert-that doc:name="Assert tier == priority"
+                                     expression="#[payload.tier]"
+                                     is="#[MunitTools::equalTo('priority')]"/>
+            <munit-tools:assert-that doc:name="Assert orderId is present"
+                                     expression="#[payload.orderId]"
+                                     is="#[MunitTools::notNullValue()]"/>
+            <munit-tools:assert-that doc:name="Assert status is absent"
+                                     expression="#[payload.status]"
+                                     is="#[MunitTools::nullValue()]"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- ============================================================
+         Unit: validate-order-subflow  (choice / router, raises)
+         ============================================================ -->
+
+    <munit:test name="validate-order-should-pass-valid-order"
+                description="A positive amount passes validation unchanged (otherwise branch), raising no error."
+                tags="smoke,regression">
+        <!-- GIVEN: a positive amount -->
+        <munit:behavior>
+            <munit:set-event doc:name="Input: order amount 250">
+                <munit:payload value="#[%dw 2.0 output application/json --- { amount: 250 }]"
+                               mediaType="application/json"/>
+            </munit:set-event>
+        </munit:behavior>
+        <!-- WHEN: validation runs -->
+        <munit:execution>
+            <flow-ref name="validate-order-subflow"/>
+        </munit:execution>
+        <!-- THEN: no error, payload unchanged -->
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Assert amount unchanged == 250"
+                                     expression="#[payload.amount]"
+                                     is="#[MunitTools::equalTo(250)]"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Invalid-amount branch: explicit per-case tests (designed as one parameterized test) -->
+    <munit:test name="validate-order-should-raise-invalid-when-amount-missing"
+                description="An order with no amount fails validation by raising ORDERS:INVALID (when branch, null case)."
+                expectedErrorType="ORDERS:INVALID"
+                expectedErrorDescription="amount must be a positive number"
+                tags="error,regression">
+        <munit:behavior>
+            <munit:set-event doc:name="Input: order with no amount">
+                <munit:payload value="#[%dw 2.0 output application/json --- {}]"
+                               mediaType="application/json"/>
+            </munit:set-event>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="validate-order-subflow"/>
+        </munit:execution>
+    </munit:test>
+
+    <munit:test name="validate-order-should-raise-invalid-when-amount-zero"
+                description="An order with amount 0 fails validation by raising ORDERS:INVALID (when branch, boundary case)."
+                expectedErrorType="ORDERS:INVALID"
+                expectedErrorDescription="amount must be a positive number"
+                tags="error,regression">
+        <munit:behavior>
+            <munit:set-event doc:name="Input: order amount 0">
+                <munit:payload value="#[%dw 2.0 output application/json --- { amount: 0 }]"
+                               mediaType="application/json"/>
+            </munit:set-event>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="validate-order-subflow"/>
+        </munit:execution>
+    </munit:test>
+
+    <munit:test name="validate-order-should-raise-invalid-when-amount-negative"
+                description="An order with a negative amount fails validation by raising ORDERS:INVALID (when branch)."
+                expectedErrorType="ORDERS:INVALID"
+                expectedErrorDescription="amount must be a positive number"
+                tags="error,regression">
+        <munit:behavior>
+            <munit:set-event doc:name="Input: order amount -5">
+                <munit:payload value="#[%dw 2.0 output application/json --- { amount: -5 }]"
+                               mediaType="application/json"/>
+            </munit:set-event>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="validate-order-subflow"/>
+        </munit:execution>
+    </munit:test>
+
+    <!-- ============================================================
+         Unit: build-order-record-subflow  (transformation)
+         Explicit per-case tests (designed as one parameterized test).
+         orderId = uuid() asserted via matcher (non-null string), never equalTo.
+         ============================================================ -->
+
+    <munit:test name="build-order-record-should-tier-standard-when-amount-50"
+                description="An amount of 50 maps to tier=standard, the amount passes through, and an orderId is generated."
+                tags="smoke,regression">
+        <munit:behavior>
+            <munit:set-event doc:name="Input: order amount 50">
+                <munit:payload value="#[%dw 2.0 output application/json --- { amount: 50 }]"
+                               mediaType="application/json"/>
+            </munit:set-event>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="build-order-record-subflow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Assert amount == 50"
+                                     expression="#[payload.amount]" is="#[MunitTools::equalTo(50)]"/>
+            <munit-tools:assert-that doc:name="Assert tier == standard"
+                                     expression="#[payload.tier]" is="#[MunitTools::equalTo('standard')]"/>
+            <munit-tools:assert-that doc:name="Assert orderId is a non-null string"
+                                     expression="#[(payload.orderId is String) and (payload.orderId != null)]"
+                                     is="#[MunitTools::equalTo(true)]"/>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="build-order-record-should-tier-standard-when-amount-100"
+                description="The boundary amount of 100 maps to tier=standard (not greater than 100), with the amount passed through and an orderId generated."
+                tags="smoke,regression">
+        <munit:behavior>
+            <munit:set-event doc:name="Input: order amount 100">
+                <munit:payload value="#[%dw 2.0 output application/json --- { amount: 100 }]"
+                               mediaType="application/json"/>
+            </munit:set-event>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="build-order-record-subflow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Assert amount == 100"
+                                     expression="#[payload.amount]" is="#[MunitTools::equalTo(100)]"/>
+            <munit-tools:assert-that doc:name="Assert tier == standard"
+                                     expression="#[payload.tier]" is="#[MunitTools::equalTo('standard')]"/>
+            <munit-tools:assert-that doc:name="Assert orderId is a non-null string"
+                                     expression="#[(payload.orderId is String) and (payload.orderId != null)]"
+                                     is="#[MunitTools::equalTo(true)]"/>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="build-order-record-should-tier-priority-when-amount-101"
+                description="The just-over-threshold amount of 101 maps to tier=priority, with the amount passed through and an orderId generated."
+                tags="smoke,regression">
+        <munit:behavior>
+            <munit:set-event doc:name="Input: order amount 101">
+                <munit:payload value="#[%dw 2.0 output application/json --- { amount: 101 }]"
+                               mediaType="application/json"/>
+            </munit:set-event>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="build-order-record-subflow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Assert amount == 101"
+                                     expression="#[payload.amount]" is="#[MunitTools::equalTo(101)]"/>
+            <munit-tools:assert-that doc:name="Assert tier == priority"
+                                     expression="#[payload.tier]" is="#[MunitTools::equalTo('priority')]"/>
+            <munit-tools:assert-that doc:name="Assert orderId is a non-null string"
+                                     expression="#[(payload.orderId is String) and (payload.orderId != null)]"
+                                     is="#[MunitTools::equalTo(true)]"/>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="build-order-record-should-tier-priority-when-amount-250"
+                description="An amount of 250 maps to tier=priority, with the amount passed through and an orderId generated."
+                tags="smoke,regression">
+        <munit:behavior>
+            <munit:set-event doc:name="Input: order amount 250">
+                <munit:payload value="#[%dw 2.0 output application/json --- { amount: 250 }]"
+                               mediaType="application/json"/>
+            </munit:set-event>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="build-order-record-subflow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Assert amount == 250"
+                                     expression="#[payload.amount]" is="#[MunitTools::equalTo(250)]"/>
+            <munit-tools:assert-that doc:name="Assert tier == priority"
+                                     expression="#[payload.tier]" is="#[MunitTools::equalTo('priority')]"/>
+            <munit-tools:assert-that doc:name="Assert orderId is a non-null string"
+                                     expression="#[(payload.orderId is String) and (payload.orderId != null)]"
+                                     is="#[MunitTools::equalTo(true)]"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- FLAGGED ADDITIONS (approved via Open Question A4): isolated null / negative inputs.
+         Verified behaviour: a null amount makes `payload.amount > 100` compare Null to Number,
+         which DataWeave (Mule 4.9) rejects with MULE:EXPRESSION — the transform raises, it does
+         NOT default to tier=standard. (This corrects the Phase 1 assumption.) -->
+    <munit:test name="build-order-record-should-raise-expression-error-when-amount-null"
+                description="With no amount, the tier comparison (amount > 100) cannot compare Null and Number, so the transform raises MULE:EXPRESSION."
+                expectedErrorType="MULE:EXPRESSION"
+                tags="error,regression">
+        <munit:behavior>
+            <munit:set-event doc:name="Input: order with no amount">
+                <munit:payload value="#[%dw 2.0 output application/json --- {}]"
+                               mediaType="application/json"/>
+            </munit:set-event>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="build-order-record-subflow"/>
+        </munit:execution>
+    </munit:test>
+
+    <munit:test name="build-order-record-should-tier-standard-when-amount-negative"
+                description="A negative amount (-5) maps to tier=standard, with the amount passed through and an orderId generated."
+                tags="regression">
+        <munit:behavior>
+            <munit:set-event doc:name="Input: order amount -5">
+                <munit:payload value="#[%dw 2.0 output application/json --- { amount: -5 }]"
+                               mediaType="application/json"/>
+            </munit:set-event>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="build-order-record-subflow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Assert amount == -5"
+                                     expression="#[payload.amount]" is="#[MunitTools::equalTo(-5)]"/>
+            <munit-tools:assert-that doc:name="Assert tier == standard"
+                                     expression="#[payload.tier]" is="#[MunitTools::equalTo('standard')]"/>
+            <munit-tools:assert-that doc:name="Assert orderId is a non-null string"
+                                     expression="#[(payload.orderId is String) and (payload.orderId != null)]"
+                                     is="#[MunitTools::equalTo(true)]"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- ============================================================
+         Unit: route-order-flow  (orchestration + choice)
+         ============================================================ -->
+
+    <munit:test name="route-order-should-notify-and-mark-notified-when-amount-over-threshold"
+                description="An order with amount greater than 100 calls the notification exactly once and is marked status=accepted, notified=true."
+                tags="smoke,regression">
+        <!-- GIVEN: a large order; the alert succeeds -->
+        <munit:behavior>
+            <munit:set-event doc:name="Input: order amount 250">
+                <munit:payload value="#[%dw 2.0 output application/json --- { amount: 250 }]"
+                               mediaType="application/json"/>
+            </munit:set-event>
+            <munit-tools:mock-when processor="http:request" doc:name="Mock post-alert returns 200">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="post-alert"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[%dw 2.0 output application/json --- { delivered: true }]"
+                                         mediaType="application/json"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <!-- WHEN: routing runs -->
+        <munit:execution>
+            <flow-ref name="route-order-flow"/>
+        </munit:execution>
+        <!-- THEN: accepted + notified, alert called once.
+             NOTE: tier/amount/orderId not asserted — notify-flow's http:request replaces
+             the payload with the mocked response before status/notified are set. -->
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Assert status == accepted"
+                                     expression="#[payload.status]"
+                                     is="#[MunitTools::equalTo('accepted')]"/>
+            <munit-tools:assert-that doc:name="Assert notified == true"
+                                     expression="#[payload.notified]"
+                                     is="#[MunitTools::equalTo(true)]"/>
+            <munit-tools:verify-call doc:name="Verify post-alert called once" processor="http:request" times="1">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="post-alert"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="route-order-should-not-notify-when-amount-not-over-threshold"
+                description="An order with amount not greater than 100 takes the otherwise branch: status=accepted, notified=false, and the notification is never called."
+                tags="smoke,regression">
+        <!-- GIVEN: a boundary order (100); alert mocked as defence -->
+        <munit:behavior>
+            <munit:set-event doc:name="Input: order amount 100">
+                <munit:payload value="#[%dw 2.0 output application/json --- { amount: 100 }]"
+                               mediaType="application/json"/>
+            </munit:set-event>
+            <munit-tools:mock-when processor="http:request" doc:name="Mock post-alert (defence, must not be called)">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="post-alert"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[%dw 2.0 output application/json --- { delivered: true }]"
+                                         mediaType="application/json"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <!-- WHEN: routing runs -->
+        <munit:execution>
+            <flow-ref name="route-order-flow"/>
+        </munit:execution>
+        <!-- THEN: accepted + not notified; record preserved (no notify on this branch) -->
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Assert status == accepted"
+                                     expression="#[payload.status]"
+                                     is="#[MunitTools::equalTo('accepted')]"/>
+            <munit-tools:assert-that doc:name="Assert notified == false"
+                                     expression="#[payload.notified]"
+                                     is="#[MunitTools::equalTo(false)]"/>
+            <munit-tools:assert-that doc:name="Assert tier == standard"
+                                     expression="#[payload.tier]"
+                                     is="#[MunitTools::equalTo('standard')]"/>
+            <munit-tools:verify-call doc:name="Verify post-alert never called" processor="http:request" times="0">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="post-alert"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="route-order-should-propagate-when-notification-fails"
+                description="When the notification call fails with HTTP:CONNECTIVITY, route-order-flow has no local handler and propagates the error."
+                expectedErrorType="HTTP:CONNECTIVITY"
+                tags="error,regression">
+        <!-- GIVEN: a large order; the alert raises a connectivity error -->
+        <munit:behavior>
+            <munit:set-event doc:name="Input: order amount 250">
+                <munit:payload value="#[%dw 2.0 output application/json --- { amount: 250 }]"
+                               mediaType="application/json"/>
+            </munit:set-event>
+            <munit-tools:mock-when processor="http:request" doc:name="Mock post-alert raises HTTP:CONNECTIVITY">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="post-alert"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:error typeId="HTTP:CONNECTIVITY"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <!-- WHEN: routing runs -->
+        <!-- THEN: HTTP:CONNECTIVITY propagates — asserted via expectedErrorType -->
+        <munit:execution>
+            <flow-ref name="route-order-flow"/>
+        </munit:execution>
+    </munit:test>
+
+    <!-- ============================================================
+         Unit: notify-flow  (integration / connector)
+         ============================================================ -->
+
+    <munit:test name="notify-flow-should-call-post-alert-once-on-happy-path"
+                description="notify-flow invokes the post-alert HTTP request exactly once on the happy path."
+                tags="smoke,regression">
+        <!-- GIVEN: any order; the alert succeeds -->
+        <munit:behavior>
+            <munit:set-event doc:name="Input: order amount 250">
+                <munit:payload value="#[%dw 2.0 output application/json --- { amount: 250 }]"
+                               mediaType="application/json"/>
+            </munit:set-event>
+            <munit-tools:mock-when processor="http:request" doc:name="Mock post-alert returns 200">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="post-alert"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[%dw 2.0 output application/json --- { delivered: true }]"
+                                         mediaType="application/json"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <!-- WHEN: notify-flow runs -->
+        <munit:execution>
+            <flow-ref name="notify-flow"/>
+        </munit:execution>
+        <!-- THEN: the alert was called exactly once -->
+        <munit:validation>
+            <munit-tools:verify-call doc:name="Verify post-alert called once" processor="http:request" times="1">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="post-alert"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="notify-flow-should-propagate-connectivity-error"
+                description="notify-flow propagates HTTP:CONNECTIVITY when the post-alert request fails."
+                expectedErrorType="HTTP:CONNECTIVITY"
+                tags="error,regression">
+        <!-- GIVEN: the alert raises a connectivity error -->
+        <munit:behavior>
+            <munit:set-event doc:name="Input: order amount 250">
+                <munit:payload value="#[%dw 2.0 output application/json --- { amount: 250 }]"
+                               mediaType="application/json"/>
+            </munit:set-event>
+            <munit-tools:mock-when processor="http:request" doc:name="Mock post-alert raises HTTP:CONNECTIVITY">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="post-alert"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:error typeId="HTTP:CONNECTIVITY"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <!-- WHEN: notify-flow runs -->
+        <munit:execution>
+            <flow-ref name="notify-flow"/>
+        </munit:execution>
+    </munit:test>
+
+</mule>
