@@ -31,7 +31,7 @@
         http://www.mulesoft.org/schema/mule/munit-tools
           http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd">
 
-    <munit:config name="munit-orders-api-suite" minMuleVersion="4.9.11" doc:name="Orders API unit suite"/>
+    <munit:config name="munit-orders-api-suite" minMuleVersion="4.9.0" doc:name="Orders API unit suite"/>
 
     <!-- ============================================================ -->
     <!-- validate-order-subflow  (choice / router; raises ORDERS:INVALID) -->
@@ -72,9 +72,7 @@
         <munit:execution>
             <flow-ref name="validate-order-subflow"/>
         </munit:execution>
-        <!-- THEN: error asserted via expectedErrorType; validation block empty -->
-        <munit:validation/>
-    </munit:test>
+        <!-- THEN: error asserted via expectedErrorType; validation block empty -->    </munit:test>
 
     <munit:test name="validate-order-should-raise-invalid-when-amount-negative"
                 description="A negative amount is rejected with ORDERS:INVALID."
@@ -90,9 +88,7 @@
         <munit:execution>
             <flow-ref name="validate-order-subflow"/>
         </munit:execution>
-        <!-- THEN: error asserted via expectedErrorType -->
-        <munit:validation/>
-    </munit:test>
+        <!-- THEN: error asserted via expectedErrorType -->    </munit:test>
 
     <munit:test name="validate-order-should-raise-invalid-when-amount-null"
                 description="A null amount is rejected with ORDERS:INVALID via the first or-clause."
@@ -108,9 +104,7 @@
         <munit:execution>
             <flow-ref name="validate-order-subflow"/>
         </munit:execution>
-        <!-- THEN: error asserted via expectedErrorType -->
-        <munit:validation/>
-    </munit:test>
+        <!-- THEN: error asserted via expectedErrorType -->    </munit:test>
 
     <!-- ============================================================ -->
     <!-- build-order-record-subflow  (transformation, pure DataWeave) -->
@@ -303,9 +297,7 @@
         <munit:execution>
             <flow-ref name="notify-flow"/>
         </munit:execution>
-        <!-- THEN: error asserted via expectedErrorType -->
-        <munit:validation/>
-    </munit:test>
+        <!-- THEN: error asserted via expectedErrorType -->    </munit:test>
 
     <!-- ============================================================ -->
     <!-- route-order-flow  (orchestration + choice)                   -->
@@ -484,9 +476,7 @@
         <munit:execution>
             <flow-ref name="route-order-flow"/>
         </munit:execution>
-        <!-- THEN: error asserted via expectedErrorType -->
-        <munit:validation/>
-    </munit:test>
+        <!-- THEN: error asserted via expectedErrorType -->    </munit:test>
 
     <!-- ============================================================ -->
     <!-- orders-api-main  (API entry flow + error handler)            -->
@@ -588,9 +578,7 @@
         <munit:execution>
             <flow-ref name="orders-api-main"/>
         </munit:execution>
-        <!-- THEN: error asserted via expectedErrorType; validation empty (handler re-raises) -->
-        <munit:validation/>
-    </munit:test>
+        <!-- THEN: error asserted via expectedErrorType; validation empty (handler re-raises) -->    </munit:test>
 
     <munit:test name="orders-api-main-should-accept-order-with-notified-false-when-notification-fails"
                 description="When the notification call fails the order is still accepted with notified=false; the record survives and no status field is added (observed behaviour, OQ-2)."
