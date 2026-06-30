@@ -1,0 +1,67 @@
+  name: MUnit CI
+
+  on:
+    push:
+      branches: [ main ]
+    pull_request:
+      branches: [ main ]
+    workflow_dispatch:        # manual "Run workflow" button in the Actions tab
+
+  jobs:
+    test:
+      name: Run MUnit + enforce coverage
+      runs-on: ubuntu-latest
+
+      steps:
+        - name: Checkout
+          uses: actions/checkout@v4
+
+        - name: Set up JDK 17
+          uses: actions/setup-java@v4
+          with:
+            distribution: temurin
+            java-version: '17'
+            cache: maven
+
+        - name: Run MUnit tests with coverage
+          env:
+            ANYPOINT_CLIENT_ID: ${{ secrets.ANYPOINT_CLIENT_ID }}
+            ANYPOINT_CLIENT_SECRET: ${{ secrets.ANYPOINT_CLIENT_SECRET }}
+          run: |
+            set -o pipefail
+            mvn clean test \
+              --settings .github/settings.xml \
+              --batch-mode \
+              --no-transfer-progress | tee mvn.log
+
+        # Optional diagnostic — the coverage report dir varies by MUnit version.
+        - name: Show where the coverage report landed
+          if: always()
+          run: |
+            echo "=== coverage / munit artifacts under target ==="
+            find target \( -iname '*coverage*' -o -iname '*munit*' -o -name '*.html' \) -print 2>/dev/null || true
+
+        # Option A — render the coverage numbers on the workflow run page (no download)
+        - name: Publish coverage to the run summary
+          if: always()
+          run: |
+            {
+              echo "### 🧪 MUnit Coverage"
+              echo ""
+              echo "Build status: **${{ job.status }}**"
+              echo ""
+              echo '```'
+              grep -iE 'coverage|tests run|MUnit Run Summary' mvn.log || echo "no coverage lines captured"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+
+        # The downloadable full HTML report (unchanged — this is what worked)
+        - name: Publish coverage report artifact
+          if: always()
+          uses: actions/upload-artifact@v4
+          with:
+            name: munit-coverage-report
+            path: |
+              target/META-INF/mule-src/*/reports/
+              target/site/munit/coverage/
+            if-no-files-found: warn
