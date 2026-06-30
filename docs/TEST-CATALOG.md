@@ -1,102 +1,110 @@
 # Test Catalog — munit-orders-api
 
+> Generated per the [MUnit Test Documentation Standard v1.0](../MUNIT-TEST-DOCUMENTATION-STANDARD.md).
+> Source of truth: `src/test/munit/munit-orders-api-suite.xml`. Coverage from `reports/munit-orders-api-report.html`.
+> Regenerable from the suite XML + reports — do not hand-edit prose the XML cannot reproduce.
+
 | Metric | Value |
 | --- | --- |
 | Suites | 1 |
-| Tests (`munit:test`) | 19 |
+| Tests (`munit:test`) | 20 |
 | Units covered | 5 / 5 |
-| Last run | 19 run · 0 failed · 0 errors · 0 skipped (Anypoint Studio, MMV 4.9.0, 2026-06-29) |
-| Line coverage | _read from the Studio MUnit coverage report / `munit-maven-plugin` and record here (gate 80%)_ |
-| Last generated | 2026-06-29 |
+| Line coverage | 100% application coverage · 16/16 processors (gate 80%) — `reports/munit-orders-api-report.html` |
+| Last run | **TODO** — no valid run-summary artifact in repo. The only `target/surefire-reports/*` entry is a **failed** Maven run (`errors="1"`, embedded-container BOM `mule-runtime-impl-no-services-bom:4.9.0` unresolved — environment issue, not a test failure). The 100% coverage report evidences a successful run (Anypoint Studio, MMV 4.9.0, per prior records), but the run/failed/errors/skipped counts are not present in the provided reports. Record from an actual `munit-maven-plugin` run. |
+| Last generated | 2026-06-30 |
 
-> Source of truth is `src/test/munit/munit-orders-api-suite.xml`. The full suite was last run green in
-> Anypoint Studio. Fill the coverage % from the run's coverage report.
+> [!IMPORTANT]
+> Per the standard, a green/coverage claim is valid only after a real run. The **coverage** figure above
+> is taken from the actual coverage report; the **run-summary counts** are flagged TODO because the repo
+> contains no passing run artifact to source them from.
 
 ---
 
 ## Suite: `munit-orders-api-suite`
 
 - **Source under test:** `src/main/mule/munit-orders-api.xml`
-- **Units:** `orders-api-main` (API entry + error handler), `validate-order-subflow` (choice/router),
-  `build-order-record-subflow` (transformation), `route-order-flow` (orchestration + choice),
-  `notify-flow` (integration/connector)
-- **Collaborators mocked:** `http:request` (`post-alert`)
+- **Units (+ archetype):**
+  - `orders-api-main` — API entry flow + error handler (union)
+  - `validate-order-subflow` — choice / router (raises `ORDERS:INVALID`)
+  - `build-order-record-subflow` — transformation (pure DataWeave)
+  - `route-order-flow` — orchestration + choice
+  - `notify-flow` — integration / connector (one `http:request`)
+- **Collaborators mocked:** `http:request` (`doc:name = post-alert`)
+- **Tags in use:** `smoke`, `regression`, `error`
+
+> **Payload note (from the suite + source):** `post-alert` (`http:request`) has no `target`, so a mocked
+> *return* **overwrites** `payload`. On notify-success paths the upstream record (`orderId`/`amount`/`tier`)
+> is replaced by the mock body; only fields re-added by the subsequent `set-payload` survive. A mocked
+> *error* does **not** overwrite the payload, so the record survives into the error handler.
 
 | Test ID | Unit | Category | Given (inputs) | Mocks | Then (expected) | Tags |
 | --- | --- | --- | --- | --- | --- | --- |
-| `orders-api-main-should-accept-and-notify-large-order` | orders-api-main | happy / branch>100 | amount = 250 | post-alert → 200 | status=accepted · notified=true · post-alert called ×1 (record fields overwritten by HTTP response on notify branch) | smoke, regression |
-| `orders-api-main-should-accept-small-order-without-notifying` | orders-api-main | happy / negative / branch≤100 | amount = 100 | post-alert (defence) | status=accepted · notified=false · tier=standard · amount=100 · post-alert called ×0 | smoke, regression |
-| `orders-api-main-should-propagate-invalid-order-as-orders-invalid` | orders-api-main | error path | amount = 0 | — | flow raises ORDERS:INVALID (on-error-propagate re-raises) | error, regression |
-| `orders-api-main-should-accept-order-when-notification-fails` | orders-api-main | error path / negative | amount = 250 | post-alert → HTTP:CONNECTIVITY | accepted via on-error-continue · notified=false · amount=250 · tier=priority · orderId present · status absent | error, regression |
-| `validate-order-should-pass-valid-order` | validate-order-subflow | branch (otherwise) / happy | amount = 250 | — | no error · amount unchanged = 250 | smoke, regression |
-| `validate-order-should-raise-invalid-when-amount-missing` | validate-order-subflow | branch (when) / error | `{}` (no amount) | — | flow raises ORDERS:INVALID | error, regression |
-| `validate-order-should-raise-invalid-when-amount-zero` | validate-order-subflow | branch (when) / boundary / error | amount = 0 | — | flow raises ORDERS:INVALID | error, regression |
-| `validate-order-should-raise-invalid-when-amount-negative` | validate-order-subflow | branch (when) / error | amount = -5 | — | flow raises ORDERS:INVALID | error, regression |
-| `build-order-record-should-tier-standard-when-amount-50` | build-order-record-subflow | happy / input-variant | amount = 50 | — | amount=50 · tier=standard · orderId non-null string | smoke, regression |
-| `build-order-record-should-tier-standard-when-amount-100` | build-order-record-subflow | boundary | amount = 100 | — | amount=100 · tier=standard · orderId non-null string | smoke, regression |
-| `build-order-record-should-tier-priority-when-amount-101` | build-order-record-subflow | boundary | amount = 101 | — | amount=101 · tier=priority · orderId non-null string | smoke, regression |
-| `build-order-record-should-tier-priority-when-amount-250` | build-order-record-subflow | happy / input-variant | amount = 250 | — | amount=250 · tier=priority · orderId non-null string | smoke, regression |
-| `build-order-record-should-raise-expression-error-when-amount-null` | build-order-record-subflow | boundary / error (A4) | `{}` (no amount) | — | transform raises MULE:EXPRESSION (`Null` vs `Number` comparison in `amount > 100`) | error, regression |
-| `build-order-record-should-tier-standard-when-amount-negative` | build-order-record-subflow | boundary (A4) | amount = -5 | — | amount=-5 · tier=standard · orderId non-null string | regression |
-| `route-order-should-notify-and-mark-notified-when-amount-over-threshold` | route-order-flow | happy / branch>100 / behavioural | amount = 250 | post-alert → 200 | status=accepted · notified=true · post-alert called ×1 (record overwritten by HTTP response) | smoke, regression |
-| `route-order-should-not-notify-when-amount-not-over-threshold` | route-order-flow | negative / branch≤100 | amount = 100 | post-alert (defence) | status=accepted · notified=false · tier=standard · post-alert called ×0 | smoke, regression |
-| `route-order-should-propagate-when-notification-fails` | route-order-flow | error path | amount = 250 | post-alert → HTTP:CONNECTIVITY | HTTP:CONNECTIVITY propagated (no local handler) | error, regression |
-| `notify-flow-should-call-post-alert-once-on-happy-path` | notify-flow | happy / behavioural | amount = 250 | post-alert → 200 | post-alert called ×1 | smoke, regression |
-| `notify-flow-should-propagate-connectivity-error` | notify-flow | error path | amount = 250 | post-alert → HTTP:CONNECTIVITY | HTTP:CONNECTIVITY propagated | error, regression |
-
-> **Implementation note — parameterization.** The design proposed two parameterized tests
-> (`validate-order-should-raise-invalid-when-amount-not-positive`, 3 rows; and
-> `build-order-record-should-map-amount-and-tier`, 6 rows). MUnit 3.6 declares
-> `<munit:parameterizations>` under `<munit:config>` (suite-scoped — the whole suite re-runs per
-> parameterization), which cannot host two independent data sets plus the non-parameterized tests
-> in one "suite per flow file". They are therefore implemented as the explicit per-case tests listed
-> above (`…-amount-missing/-zero/-negative` and `…-tier-*-when-amount-*`), preserving identical coverage.
+| `validate-order-should-pass-when-amount-positive` | validate-order-subflow | happy / branch (otherwise) | amount = 250 | — | no error · amount == 250 (payload passes through unchanged) | smoke, regression |
+| `validate-order-should-raise-invalid-when-amount-zero` | validate-order-subflow | error / boundary (≤0 edge) | amount = 0 | — | raises `ORDERS:INVALID` (asserted via `expectedErrorType`) | error, regression |
+| `validate-order-should-raise-invalid-when-amount-negative` | validate-order-subflow | error / input-variant | amount = -5 | — | raises `ORDERS:INVALID` | error, regression |
+| `validate-order-should-raise-invalid-when-amount-null` | validate-order-subflow | error / boundary (null, first `or` clause) | amount = null | — | raises `ORDERS:INVALID` | error, regression |
+| `build-order-record-should-set-priority-tier-when-amount-over-100` | build-order-record-subflow | happy / branch (>100) | amount = 250 | — | tier == priority · amount == 250 · orderId present (non-null) | smoke, regression |
+| `build-order-record-should-set-standard-tier-when-amount-under-100` | build-order-record-subflow | input-variant / branch (≤100) | amount = 50 | — | tier == standard · amount == 50 | regression |
+| `build-order-record-should-set-standard-tier-at-boundary-100` | build-order-record-subflow | boundary (=100) | amount = 100 | — | tier == standard (100 is not > 100) | regression |
+| `build-order-record-should-set-priority-tier-just-over-boundary-101` | build-order-record-subflow | boundary (just over) | amount = 101 | — | tier == priority | regression |
+| `notify-should-call-post-alert-and-return-its-response` | notify-flow | happy / behavioural | amount = 250 (any payload) | post-alert → `{ ok: true }` | response.ok == true (mock body survives) · post-alert called ×1 | smoke, regression |
+| `notify-should-return-empty-body-when-alert-returns-empty` | notify-flow | boundary / empty-result | any payload | post-alert → `{}` | response is empty (`sizeOf == 0`) · post-alert called ×1 | regression |
+| `notify-should-propagate-when-post-alert-connectivity-fails` | notify-flow | error path | any payload | post-alert → **error** `HTTP:CONNECTIVITY` | raises `HTTP:CONNECTIVITY` (no local handler; asserted via `expectedErrorType`) | error, regression |
+| `route-order-should-notify-and-mark-notified-true-when-amount-over-100` | route-order-flow | happy / branch (>100) / behavioural | amount = 250 | post-alert → `{}` (200) | status == accepted · notified == true · post-alert called ×1 *(amount/tier overwritten by mock return)* | smoke, regression |
+| `route-order-should-not-notify-and-mark-notified-false-when-amount-100-or-less` | route-order-flow | negative / branch (≤100) | amount = 50 | post-alert (defence) | status == accepted · notified == false · tier == standard · amount == 50 · post-alert called ×0 | smoke, regression |
+| `route-order-should-not-notify-at-boundary-100` | route-order-flow | boundary (=100) | amount = 100 | post-alert (defence) | notified == false · tier == standard · post-alert called ×0 | regression |
+| `route-order-should-notify-just-over-boundary-101` | route-order-flow | boundary (just over) | amount = 101 | post-alert → `{}` (200) | notified == true · post-alert called ×1 | regression |
+| `route-order-should-propagate-when-notification-fails` | route-order-flow | error path | amount = 250 | post-alert → **error** `HTTP:CONNECTIVITY` | raises `HTTP:CONNECTIVITY` (propagated, no local handler) | error, regression |
+| `orders-api-main-should-accept-and-notify-large-order` | orders-api-main | happy / branch (>100) / behavioural | amount = 250 | post-alert → `{}` (200) | status == accepted · notified == true · post-alert called ×1 | smoke, regression |
+| `orders-api-main-should-accept-small-order-without-notifying` | orders-api-main | happy / negative / branch (≤100) | amount = 50 | post-alert (defence) | status == accepted · notified == false · tier == standard · amount == 50 · post-alert called ×0 | smoke, regression |
+| `orders-api-main-should-propagate-invalid-when-amount-not-positive` | orders-api-main | error path | amount = 0 | — | raises `ORDERS:INVALID` (mapped to HTTP 400 by the listener; status code not observable via `flow-ref` — OQ-1) | error, regression |
+| `orders-api-main-should-accept-order-with-notified-false-when-notification-fails` | orders-api-main | error path / negative | amount = 250 | post-alert → **error** `HTTP:CONNECTIVITY` | accepted via `on-error-continue` · notified == false · amount == 250 · tier == priority · **no `status` field** (observed — OQ-2) | error, regression |
 
 ---
 
 ## Coverage gaps
 
+All 5 application units have ≥1 test — **no unit-level coverage gaps**.
+
 | Unit | Archetype | Reason untested | Owner |
 | --- | --- | --- | --- |
-| _none_ | — | All 5 units in `munit-orders-api.xml` have at least one test. | — |
+| — | — | All units covered (5/5); application coverage 100% | — |
 
-**Behavioural caveats (not gaps — flagged for the team):**
+### Behavioural gaps (spec behaviours not provable through the current tests)
 
-- **HTTP status codes (201/400) are not asserted.** Per Open Question A1, the app never wires a
-  listener response status: success sets no `201`, and the `httpStatus=400` variable is unused. Unit
-  tests via `flow-ref` cannot observe a listener status code regardless.
-- **`ORDERS:INVALID` re-raises (A2).** `orders-api-main` propagates the error rather than returning a
-  400 body; the test asserts the propagated error type only.
-- **Connectivity-recovery payload omits `status` (A3).** `notify-flow` fails before the
-  `status=accepted` set-payload, so the recovered record has no `status` field — this is asserted as
-  current behaviour, not as a desired contract (it diverges from RAML `OrderAccepted.status`).
-- **Null amount makes `build-order-record-subflow` throw (A4, verified by run).** `if (payload.amount > 100)`
-  compares `Null` to `Number`, which DataWeave (Mule 4.9) rejects with `MULE:EXPRESSION`. The subflow
-  does **not** default to `tier=standard` on a null amount. Unreachable in production (validation runs
-  first), but the isolated test documents the actual error. The Phase 1 design assumed `null > 100 → false`;
-  that assumption was wrong and the test was corrected to expect `MULE:EXPRESSION`.
+These are not missing *units* but spec behaviours the suite cannot assert as-built; tracked as TODO.
+
+| Behaviour | Why not asserted | Tracking | Owner |
+| --- | --- | --- | --- |
+| HTTP **status codes** (201 / 400) on the listener response | MUnit `flow-ref` does not invoke `http:listener`; no response-status mapping wired in the app | TODO — OQ-1 (accepted: assert error type / `httpStatus` var only) | Gonzalo Marcos |
+| **400 `Error` body shape** `{ error, message }` | `ORDERS:INVALID` handler emits empty `application/java {}`, not the RAML `Error` type | TODO — OQ-6 (flagged as a bug) | Gonzalo Marcos |
+| **`status` field on the notification-failure response** | `on-error-continue` only adds `{ notified: false }`; RAML `OrderAccepted` requires `status` | TODO — OQ-2 (asserted observed behaviour: no `status`) | Gonzalo Marcos |
+| **Missing-`amount`-key** input | Not in suite; explicit-`null` test deemed sufficient | TODO — OQ-8 (out of scope by decision) | Gonzalo Marcos |
+| `build-order-record-subflow` with null / non-numeric `amount` | DataWeave coercion semantics; validation upstream precludes in production | TODO — OQ-3 (out of scope by decision) | Gonzalo Marcos |
 
 ---
 
-## Traceability matrix (RAML `orders.raml` → tests)
+## Traceability matrix
+
+Sourced from `src/main/resources/api/orders.raml` (`POST /orders`, types `OrderRequest` / `OrderAccepted` / `Error`).
 
 | Requirement / Spec ref | Flow(s) | Test ID(s) | Status |
 | --- | --- | --- | --- |
-| `POST /orders` → 201 accepted (success) | orders-api-main, route-order-flow | `orders-api-main-should-accept-and-notify-large-order`, `orders-api-main-should-accept-small-order-without-notifying`, `route-order-should-notify-and-mark-notified-when-amount-over-threshold` | ✅ payload proven (201 status code not wired — see A1) |
-| `POST /orders` → 400 invalid (amount missing / ≤ 0, maps from ORDERS:INVALID) | orders-api-main, validate-order-subflow | `orders-api-main-should-propagate-invalid-order-as-orders-invalid`, `validate-order-should-raise-invalid-when-amount-missing`, `validate-order-should-raise-invalid-when-amount-zero`, `validate-order-should-raise-invalid-when-amount-negative` | ⚠️ error type proven; HTTP 400 mapping not wired (A1/A2) |
-| `tier = priority` when amount > 100 | build-order-record-subflow | `build-order-record-should-tier-priority-when-amount-101`, `build-order-record-should-tier-priority-when-amount-250` | ✅ |
-| `tier = standard` when amount ≤ 100 | build-order-record-subflow | `build-order-record-should-tier-standard-when-amount-50`, `build-order-record-should-tier-standard-when-amount-100`, `build-order-record-should-tier-standard-when-amount-negative` | ✅ |
-| `notified = false` when the alert call fails | orders-api-main | `orders-api-main-should-accept-order-when-notification-fails` | ✅ (status field absent — see A3) |
-| `notified` true/false by amount branch | route-order-flow | `route-order-should-notify-and-mark-notified-when-amount-over-threshold`, `route-order-should-not-notify-when-amount-not-over-threshold` | ✅ |
-| `OrderRequest.additionalProperties: false` (reject extra fields) | — | — | ❌ not enforced in the app; not tested (A4) |
+| `POST /orders` → **201** `OrderAccepted`, `notified=true`, `tier=priority` when `amount > 100` | orders-api-main → route-order-flow → notify-flow / build-order-record-subflow | `orders-api-main-should-accept-and-notify-large-order`; `route-order-should-notify-and-mark-notified-true-when-amount-over-100`; `route-order-should-notify-just-over-boundary-101`; `build-order-record-should-set-priority-tier-when-amount-over-100`; `build-order-record-should-set-priority-tier-just-over-boundary-101` | ✅ (status **code** not asserted — OQ-1) |
+| `POST /orders` → **201** `OrderAccepted`, `notified=false`, `tier=standard` when `amount ≤ 100` (no notification) | orders-api-main → route-order-flow / build-order-record-subflow | `orders-api-main-should-accept-small-order-without-notifying`; `route-order-should-not-notify-and-mark-notified-false-when-amount-100-or-less`; `route-order-should-not-notify-at-boundary-100`; `build-order-record-should-set-standard-tier-when-amount-under-100`; `build-order-record-should-set-standard-tier-at-boundary-100` | ✅ |
+| **201** with `notified=false` *when the alert call fails* | orders-api-main (`on-error-continue HTTP:CONNECTIVITY`) | `orders-api-main-should-accept-order-with-notified-false-when-notification-fails` | ⚠️ behaviour covered, but response **omits `status`** which RAML `OrderAccepted` requires (OQ-2) |
+| **400** `Error` when amount missing or `<= 0` (maps from `ORDERS:INVALID`) | orders-api-main / validate-order-subflow | `orders-api-main-should-propagate-invalid-when-amount-not-positive`; `validate-order-should-raise-invalid-when-amount-zero`; `…-negative`; `…-null` | ⚠️ error **type** covered; **400 code + `Error` body shape** not observable / not produced (OQ-1, OQ-6) |
+| `notify-flow` reaches the `post-alert` boundary exactly once on notify | notify-flow | `notify-should-call-post-alert-and-return-its-response`; `notify-should-return-empty-body-when-alert-returns-empty` | ✅ |
+| Notification connectivity failure surfaces as `HTTP:CONNECTIVITY` (before the entry-flow handler catches it) | notify-flow / route-order-flow | `notify-should-propagate-when-post-alert-connectivity-fails`; `route-order-should-propagate-when-notification-fails` | ✅ |
+| `OrderAccepted.orderId` is a string | build-order-record-subflow | `build-order-record-should-set-priority-tier-when-amount-over-100` (orderId non-null) | ✅ (presence only; type not asserted) |
+| `OrderAccepted.tier` enum `[standard, priority]` (priority when `amount > 100`) | build-order-record-subflow | `build-order-record-should-set-priority-tier-when-amount-over-100`; `…-standard-tier-when-amount-under-100`; `…-standard-tier-at-boundary-100`; `…-priority-tier-just-over-boundary-101` | ✅ |
+| `OrderRequest.amount` must be `> 0` | validate-order-subflow | the three `validate-order-should-raise-invalid-*` tests | ⚠️ RAML does not mark `amount` `required`; missing-key case untested (OQ-8) |
+| `Error` type `{ error, message }` produced on 400 | orders-api-main error handler | — | ❌ gap — handler emits empty `{}`, not `Error` (OQ-6) |
 
 ---
 
-## Mandatory-coverage rules (Testing Standard §7.2)
+## Notes
 
-| Rule | Satisfied by |
-| --- | --- |
-| Every error handler has ≥ 1 test | `orders-api-main-should-propagate-invalid-order-as-orders-invalid` (ORDERS:INVALID) + `orders-api-main-should-accept-order-when-notification-fails` (HTTP:CONNECTIVITY) |
-| Every choice branch (incl. default) is hit | validate when/otherwise; route when/otherwise; build-order tier priority/standard rows |
-| Every flow with external calls has ≥ 1 mock + ≥ 1 verify-call | notify-flow, route-order-flow, orders-api-main all mock `post-alert` and verify (×1 / ×0) |
-| Every public API entry flow: happy + ≥ 1 error→status mapping | `orders-api-main` happy + ORDERS:INVALID mapping (status caveat A1/A2) |
+- **Open Questions OQ-1 … OQ-9** are recorded and resolved in [`docs/TEST-DESIGN.md` §10](./TEST-DESIGN.md#10-open-questions-must-be-resolved-before-phase-2). The ⚠️/❌ rows above trace back to those decisions; none are silent omissions.
+- Every `munit:test` carries a full-sentence `description` (Layer 1) — no description-TODOs.
+- This catalog is fully regenerable from the suite XML + coverage report; re-run the documentation pass after any suite edit.

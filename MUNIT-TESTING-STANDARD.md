@@ -107,6 +107,9 @@ flowchart TD
 - **Action:** record, for that unit:
   - **Inputs:** payload, attributes, vars, query/uri params, headers.
   - **Outputs:** resulting payload shape, attributes, vars.
+  - **Payload flow:** how `payload` changes through the unit. A mocked **return** overwrites
+    `payload` (unless `target` is set); a mocked **error** does not. Per path (success vs error),
+    note which fields still exist at the assertion point.
   - **Collaborators to mock:** every processor that crosses the boundary (with its `doc:name`).
   - **Branches:** each `choice/when`, `scatter-gather`, `for-each`.
   - **Errors:** every error type the unit *raises* or its handler *catches*.
@@ -212,6 +215,13 @@ and derives the error-path test using the technique from [Post 10](./posts/10-te
 > If your derivation reproduces the tests an experienced engineer would have written by hand, the
 > process is sound. This worked example is the methodology's self-check (see §Verification intent).
 
+> [!WARNING]
+> **Only assert fields that survive to the assertion point.** A mocked external call's *return*
+> replaces `payload` (e.g. an `http:request` mock overwrites the message with its canned response),
+> so fields produced *before* that call are gone on the success path — but preserved on a
+> mocked-*error* path (the failing call never replaces `payload`). Derive each path's assertions
+> from the payload as it actually exists there (see §2 Step 2, **Payload flow**).
+
 ---
 
 ## 5. MUnit Feature-Selection Matrix
@@ -223,6 +233,7 @@ Pick the construct by **intent**, not by habit. This guarantees the right tool p
 | Provide payload / attributes / vars / params | `<munit:set-event>` | `munit` | [02](./posts/02-set-event-and-test-inputs.md) |
 | Replace an external call with a canned result | `<munit-tools:mock-when>` | `munit-tools` | [05](./posts/05-mocking-external-calls-with-mock-when.md) |
 | Make an external call raise an error | `<munit-tools:mock-when>` + `<munit-tools:then-return error=…>` | `munit-tools` | [10](./posts/10-testing-errors-and-error-handlers.md) |
+| Assert the unit raises / propagates an error | `expectedErrorType` (+ optional `expectedErrorDescription`, exact match) on `<munit:test>` | `munit` | [10](./posts/10-testing-errors-and-error-handlers.md) |
 | Assert an exact output value | `<munit-tools:assert-equals>` | `munit-tools` | [03](./posts/03-munit-assertions-the-full-toolbox.md) |
 | Assert with a flexible matcher | `<munit-tools:assert-that … is>` + Hamcrest | `munit-tools` | [04](./posts/04-assert-that-and-the-hamcrest-matchers.md) |
 | Assert mid-flow message state | `<munit-tools:spy>` | `munit-tools` | [09](./posts/09-inspecting-mid-flow-with-spy.md) |
@@ -231,6 +242,14 @@ Pick the construct by **intent**, not by habit. This guarantees the right tool p
 | Same logic, many input rows | `<munit:parameterizations>` | `munit` | [11](./posts/11-parameterized-suites-one-test-many-inputs.md) |
 | Remove duplication / group runs | extract fixtures + tags | `munit` | [12](./posts/12-refactoring-tests-reuse-tags-and-suite-hygiene.md) |
 | Scaffold a test from a real run | MUnit Recorder | (IDE) | [08](./posts/08-recording-tests-with-the-munit-recorder.md) |
+
+> [!NOTE]
+> **Error-path tests assert via attributes, not the validation block.** To assert that a unit raises
+> or propagates an error, set `expectedErrorType` (and optionally `expectedErrorDescription`, an
+> *exact* match) on `<munit:test>`. The flow aborts at `<munit:execution>`, so the
+> `<munit:validation>` block does **not** run — leave it empty; do not put asserts or `verify-call`
+> there. To verify a compensating call on failure, the error must be *caught* (e.g.
+> `on-error-continue`) so the flow completes and validation runs.
 
 ---
 
@@ -292,6 +311,8 @@ Every test follows the three MUnit blocks, in order:
 - **One logical concern per test** — if a test name needs "and", split it.
 - Mocks and inputs go in `<munit:behavior>`; the `flow-ref` in `<munit:execution>`; all checks in
   `<munit:validation>`.
+- Both `whereValue="#['post-alert']"` (expression) and `whereValue="post-alert"` (plain string) are
+  valid for matching a processor's `doc:name`; the MUnit Recorder emits the plain form.
 
 ### 6.3 Tags
 
@@ -316,21 +337,35 @@ Standardized tag set for selective runs (`munit.tags` / `-Dmunit.tags`):
 > When **≥ 3** tests differ only by input/expected data, convert them to a **parameterized suite**
 > ([Post 11](./posts/11-parameterized-suites-one-test-many-inputs.md)). Below 3, keep them inline.
 
+> [!IMPORTANT]
+> `<munit:parameterizations>` is a child of **`<munit:config>`**, *not* of `<munit:test>` — it is
+> **suite-scoped**: the *entire* suite re-runs once per parameterization, and each `propertyName` is
+> referenced inside the tests with `${propName}`. (Verified against the MUnit 3.6 `mule-munit.xsd`;
+> placement is version-specific.) Nesting `<munit:parameterizations>` inside a `<munit:test>` is
+> schema-invalid and crashes the Anypoint Studio visual editor.
+>
+> **One parameterization set per suite.** If a flow file needs ≥ 2 independent data-driven groups,
+> or a mix of data-driven and non-data-driven tests, under the "one suite per flow file" rule
+> (§6.2), implement those cases as **explicit per-case tests** (or split into separate suites) —
+> never nest `parameterizations` in a test.
+
 ```xml
-<munit:parameterizations>
-    <munit:parameterization name="valid-standard">
-        <munit:parameters>
-            <munit:parameter propertyName="email"         value="gon@example.com"/>
-            <munit:parameter propertyName="expectedValid" value="#[true]"/>
-        </munit:parameters>
-    </munit:parameterization>
-    <munit:parameterization name="missing-at">
-        <munit:parameters>
-            <munit:parameter propertyName="email"         value="gon.example.com"/>
-            <munit:parameter propertyName="expectedValid" value="#[false]"/>
-        </munit:parameters>
-    </munit:parameterization>
-</munit:parameterizations>
+<munit:config name="validate-email-suite" minMuleVersion="4.9.0">
+    <munit:parameterizations>
+        <munit:parameterization name="valid-standard">
+            <munit:parameters>
+                <munit:parameter propertyName="email"         value="gon@example.com"/>
+                <munit:parameter propertyName="expectedValid" value="#[true]"/>
+            </munit:parameters>
+        </munit:parameterization>
+        <munit:parameterization name="missing-at">
+            <munit:parameters>
+                <munit:parameter propertyName="email"         value="gon.example.com"/>
+                <munit:parameter propertyName="expectedValid" value="#[false]"/>
+            </munit:parameters>
+        </munit:parameterization>
+    </munit:parameterizations>
+</munit:config>
 ```
 
 ### 6.6 Determinism rules
@@ -338,6 +373,9 @@ Standardized tag set for selective runs (`munit.tags` / `-Dmunit.tags`):
 - No real network calls — every boundary collaborator is mocked.
 - Dynamic ports for any embedded listener.
 - No assertions on `now()` / `Math.random()` / UUIDs without freezing or matcher-based checks.
+- Never assume **DataWeave / runtime evaluation semantics** (null comparisons such as `null > n`,
+  type coercions, `as` casts, missing-key access). Verify the actual result by running, or flag it
+  as an Open Question — do not assert a guessed outcome.
 - Tests must pass in any order and in isolation (no inter-test shared mutable state).
 
 ---
@@ -472,6 +510,17 @@ Only after the Test Design Document is approved. The agent now runs §2 Steps 5�
 using namespaces matching the runtime and only the connector namespaces actually used. It must not
 add, drop, or alter tests relative to the approved design without flagging the change.
 
+> [!IMPORTANT]
+> **Run & reconcile (§2 Step 8 made explicit).** After emitting the suite the agent **runs it** and
+> resolves every failure/error before delivering:
+> - a **test bug** → fix the test;
+> - a **wrong design assumption** (the app does something other than the design predicted) → correct
+>   the test to the *observed* behaviour, update the Test Design Document **and** the catalog, and
+>   **flag** the correction.
+>
+> Never deliver a red suite, and never assert behaviour the run contradicts. A corrected assumption
+> is the only sanctioned reason to deviate from the approved design (still flagged, per above).
+
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <mule xmlns="http://www.mulesoft.org/schema/mule/core"
@@ -539,7 +588,9 @@ apiSpec={... or none}; examplePayloads={... or none}; existingSuites={... or non
 Follow the Phase 1 procedure (Testing Standard §8.2):
 1. Inventory the units in the target file(s); classify each by archetype (§3).
 2. Build a contract sheet per unit: inputs, outputs, boundary collaborators (to mock) vs owned
-   logic (leave real), branches, and error types raised/caught.
+   logic (leave real), branches, error types raised/caught, and the PAYLOAD FLOW — a mocked return
+   overwrites `payload`, a mocked error does not, so record which fields survive at the assertion
+   point on each path.
 3. Derive test cases: taxonomy triggers (§4) + the mandatory categories for each archetype (§3).
 4. Plan mocks per test (mock-return / mock-error / spy / leave-real).
 5. Note the MUnit construct per test (feature-selection matrix §5).
@@ -553,6 +604,8 @@ spec, and an Open Questions list.
 HARD RULES:
 - Only test logic that EXISTS in the app. NEVER invent behaviour. Any ambiguity goes under Open
   Questions for me to decide — do not guess and do not ask to proceed.
+- Do NOT guess DataWeave/runtime semantics (null comparisons like `null > n`, coercions, `as` casts,
+  missing keys) for null/empty/boundary inputs — verify them or list them as Open Questions.
 - Write ONLY docs/TEST-DESIGN.md. Do not write suite XML or touch any other file.
 - After writing the file, give me a one-paragraph summary and stop so I can read and validate it.
   Once I approve (and answer the Open Questions), you will implement the suites in Phase 2.
@@ -565,10 +618,16 @@ The Test Design Document is approved (my answers to the Open Questions are above
 per Testing Standard §8.4 and §6, and the Documentation Standard.
 
 - Emit one <flow>-suite.xml per production flow file using the standard skeleton; name tests
-  <unit>-should-<behaviour>; apply tags, fixtures, and parameterization (>=3 data-only dupes).
+  <unit>-should-<behaviour>; apply tags and fixtures. Parameterizations are suite-scoped under
+  <munit:config> (>=3 data-only dupes); if a suite needs >1 independent data set, expand those to
+  explicit per-case tests — never nest <munit:parameterizations> in a <munit:test>.
+- Assert raised/propagated errors via expectedErrorType (+ optional expectedErrorDescription) on
+  <munit:test>, with an empty <munit:validation> block.
 - Implement EXACTLY the approved tests — do not add, drop, or alter a test without flagging it.
 - Deterministic & offline: mock every boundary collaborator; dynamic ports; no now()/random/UUID
   without freezing or matchers. Emit valid MUnit XML for muleVersion={muleVersion}; only used namespaces.
+- RUN the suite and reconcile every failure before delivering: fix test bugs; for a wrong design
+  assumption, correct the test to the observed behaviour and update the design doc + catalog + flag it.
 - Then generate/refresh the test catalog and traceability matrix per the Documentation Standard.
 ```
 
@@ -578,8 +637,12 @@ per Testing Standard §8.4 and §6, and the Documentation Standard.
 > These constraints prevent the most common failure modes of automated test generation.
 
 - **Design before build** — never write suite XML before the Test Design Document is approved (the two-phase gate, §8 intro).
-- **No invented behaviour** — test only what the flow does. Ambiguity → an **Open Question** in
-  Phase 1 (or a flagged `TODO` in Phase 2), never a guess.
+- **No invented behaviour** — test only what the flow does. This includes **runtime/DataWeave
+  evaluation semantics** (null comparisons, coercions, `as` casts, missing keys): verify them by
+  running or treat them as ambiguity. Ambiguity → an **Open Question** in Phase 1 (or a flagged
+  `TODO` in Phase 2), never a guess.
+- **Run before delivering** — Phase 2 ends with a green run; reconcile every failure (§8.4), never
+  hand back a red suite.
 - **Implement the approved design** — Phase 2 must not silently add, drop, or change tests.
 - **Determinism** — offline, mocked boundaries, dynamic ports, no time/random coupling.
 - **Mock every boundary** — a unit test that hits a real collaborator is rejected.

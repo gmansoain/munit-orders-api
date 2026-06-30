@@ -154,8 +154,14 @@ the app. Structure: an overview, then **one section per suite**, each with a tab
 | Tests | 42 |
 | Units covered | 12 / 14 |
 | Line coverage | 86% (gate 80%) |
+| Last run | 42 run · 0 failed · 0 errors · 0 skipped (MMV 4.9.0, 2026-06-24) |
 | Last generated | 2026-06-24 |
 ```
+
+> [!IMPORTANT]
+> The catalog may claim a green/coverage status only **after a real run**. The `Last run` row records
+> the run summary (run / failed / errors / skipped, runtime version) and `Line coverage` comes from
+> the coverage report — both filled from an actual execution, never asserted from the design.
 
 ### 5.2 Per-suite table (the core artifact)
 
@@ -173,6 +179,9 @@ Each test is one row. These columns are **mandatory**:
   vocabulary (happy / input-variant / boundary / branch / error / behavioural / negative).
 - **Mocks** lists collaborator `doc:name` → canned result/error; `—` if none.
 - **Then** states the assertion(s) and verification(s) in plain language.
+- **Error-path tests:** the **Then** column states the asserted error type/description (from
+  `expectedErrorType` / `expectedErrorDescription`), and **Mocks** is `—` when the error is raised
+  by the unit itself rather than by a mocked collaborator.
 - A unit with **no row anywhere** in the catalog is a coverage gap — flag it (§5.3).
 
 ### 5.3 Coverage-gap section
