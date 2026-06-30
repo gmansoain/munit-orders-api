@@ -27,6 +27,8 @@
           env:
             ANYPOINT_CLIENT_ID: ${{ secrets.ANYPOINT_CLIENT_ID }}
             ANYPOINT_CLIENT_SECRET: ${{ secrets.ANYPOINT_CLIENT_SECRET }}
+            MULE_EE_USERNAME: ${{ secrets.MULE_EE_USERNAME }}
+            MULE_EE_PASSWORD: ${{ secrets.MULE_EE_PASSWORD }}
           run: |
             set -o pipefail
             mvn clean test \

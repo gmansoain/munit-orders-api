@@ -10,6 +10,11 @@
             <username>~~~Client~~~</username>
             <password>${env.ANYPOINT_CLIENT_ID}~?~${env.ANYPOINT_CLIENT_SECRET}</password>
         </server>
+        <server>
+            <id>MuleRepository</id>
+            <username>${env.MULE_EE_USERNAME}</username>
+            <password>${env.MULE_EE_PASSWORD}</password>
+        </server>
     </servers>
 
     <profiles>
@@ -30,6 +35,18 @@
                     <name>MuleSoft Releases</name>
                     <url>https://repository.mulesoft.org/releases/</url>
                     <layout>default</layout>
+                </repository>
+                <repository>
+                    <id>MuleRepository</id>
+                    <name>MuleRepository</name>
+                    <url>https://repository.mulesoft.org/nexus-ee/content/repositories/releases-ee/</url>
+                    <layout>default</layout>
+                    <releases>
+                        <enabled>true</enabled>
+                    </releases>
+                    <snapshots>
+                        <enabled>true</enabled>
+                    </snapshots>
                 </repository>
             </repositories>
         </profile>
